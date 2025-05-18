@@ -139,32 +139,33 @@ type HandlerOptions struct {
 	// to adjust the minimum level dynamically, use a LevelVar.
 	Level Leveler
 
-	// ReplaceAttr is called to rewrite each non-group attribute before it is logged.
-	// The attribute's value has been resolved (see [Value.Resolve]).
+	// ReplaceAttr is called to rewrite each non-group attribute before it is
+	// logged. The attribute's value has been resolved (see [Value.Resolve]).
 	// If ReplaceAttr returns a zero Attr, the attribute is discarded.
 	//
 	// The built-in attributes with keys "time", "level", "source", and "msg"
 	// are passed to this function, except that time is omitted
 	// if zero, and source is omitted if AddSource is false.
 	//
-	// The first argument is a list of currently open groups that contain the
+	// The first argument is the path to the current group that contains the
 	// Attr. It must not be retained or modified. ReplaceAttr is never called
 	// for Group attributes, only their contents. For example, the attribute
 	// list
 	//
-	//     Int("a", 1), Group("g", Int("b", 2)), Int("c", 3)
+	//     Int("a", 1), Group("g", Int("b", 2)), Int("c", 3), List("l", GroupValue(Int("d", 4)))
 	//
 	// results in consecutive calls to ReplaceAttr with the following arguments:
 	//
 	//     nil, Int("a", 1)
 	//     []string{"g"}, Int("b", 2)
 	//     nil, Int("c", 3)
+	//     []string{"l", "[0]"}, Int("d", 4)
 	//
 	// ReplaceAttr can be used to change the default keys of the built-in
 	// attributes, convert types (for example, to replace a `time.Time` with the
 	// integer seconds since the Unix epoch), sanitize personal information, or
 	// remove attributes from the output.
-	ReplaceAttr func(groups []string, a Attr) Attr
+	ReplaceAttr func(path []string, a Attr) Attr
 }
 
 // Keys for "built-in" attributes.
@@ -268,9 +269,9 @@ func (h *commonHandler) handle(r Record) error {
 	if h.json {
 		state.buf.WriteByte('{')
 	}
-	// Built-in attributes. They are not in a group.
-	stateGroups := state.groups
-	state.groups = nil // So ReplaceAttrs sees no groups instead of the pre groups.
+	// Built-in attributes. They are not under any path.
+	statePath := state.path
+	state.path = nil // so ReplaceAttrs sees empty path instead of the path of pre groups.
 	rep := h.opts.ReplaceAttr
 	// time
 	if !r.Time.IsZero() {
@@ -304,7 +305,7 @@ func (h *commonHandler) handle(r Record) error {
 	} else {
 		state.appendAttr(String(key, msg))
 	}
-	state.groups = stateGroups // Restore groups passed to ReplaceAttrs.
+	state.path = statePath // restore path passed to ReplaceAttrs.
 	state.appendNonBuiltIns(r)
 	state.buf.WriteByte('\n')
 
@@ -376,10 +377,10 @@ type handleState struct {
 	freeBuf bool           // should buf be freed?
 	sep     string         // separator to write before next key
 	prefix  *buffer.Buffer // for text: key prefix
-	groups  *[]string      // pool-allocated slice of active groups, for ReplaceAttr
+	path    *[]string      // pool-allocated slice of active path, for ReplaceAttr
 }
 
-var groupPool = sync.Pool{New: func() any {
+var pathPool = sync.Pool{New: func() any {
 	s := make([]string, 0, 10)
 	return &s
 }}
@@ -393,8 +394,8 @@ func (h *commonHandler) newHandleState(buf *buffer.Buffer, freeBuf bool, sep str
 		prefix:  buffer.New(),
 	}
 	if h.opts.ReplaceAttr != nil {
-		s.groups = groupPool.Get().(*[]string)
-		*s.groups = append(*s.groups, h.groups[:h.nOpenGroups]...)
+		s.path = pathPool.Get().(*[]string)
+		*s.path = append(*s.path, h.groups[:h.nOpenGroups]...)
 	}
 	return s
 }
@@ -403,16 +404,16 @@ func (s *handleState) free() {
 	if s.freeBuf {
 		s.buf.Free()
 	}
-	if gs := s.groups; gs != nil {
-		*gs = (*gs)[:0]
-		groupPool.Put(gs)
+	if path := s.path; path != nil {
+		*path = (*path)[:0]
+		pathPool.Put(path)
 	}
 	s.prefix.Free()
 }
 
 func (s *handleState) openGroups() {
 	for _, n := range s.h.groups[s.h.nOpenGroups:] {
-		s.openGroup(n)
+		s.openGroup(n, false)
 	}
 }
 
@@ -421,31 +422,76 @@ const keyComponentSep = '.'
 
 // openGroup starts a new group of attributes
 // with the given name.
-func (s *handleState) openGroup(name string) {
+func (s *handleState) openGroup(name string, inList bool) {
 	if s.h.json {
-		s.appendKey(name)
+		if !inList {
+			s.appendKey(name)
+		}
 		s.buf.WriteByte('{')
 		s.sep = ""
 	} else {
-		s.prefix.WriteString(name)
+		if !inList {
+			s.prefix.WriteString(name)
+		}
 		s.prefix.WriteByte(keyComponentSep)
 	}
 	// Collect group names for ReplaceAttr.
-	if s.groups != nil {
-		*s.groups = append(*s.groups, name)
+	if !inList && s.path != nil {
+		*s.path = append(*s.path, name)
 	}
 }
 
 // closeGroup ends the group with the given name.
-func (s *handleState) closeGroup(name string) {
+func (s *handleState) closeGroup(name string, inList bool) {
 	if s.h.json {
 		s.buf.WriteByte('}')
 	} else {
-		(*s.prefix) = (*s.prefix)[:len(*s.prefix)-len(name)-1 /* for keyComponentSep */]
+		if inList {
+			(*s.prefix) = (*s.prefix)[:len(*s.prefix)-1 /* for keyComponentSep */]
+		} else {
+			(*s.prefix) = (*s.prefix)[:len(*s.prefix)-len(name)-1 /* for keyComponentSep */]
+		}
 	}
 	s.sep = s.h.attrSep()
-	if s.groups != nil {
-		*s.groups = (*s.groups)[:len(*s.groups)-1]
+	if !inList && s.path != nil {
+		*s.path = (*s.path)[:len(*s.path)-1]
+	}
+}
+
+// openList starts a new list of values
+// with the given name.
+func (s *handleState) openList(name string, inList bool) {
+	if inList {
+		if s.h.json {
+			s.buf.WriteByte('[')
+			s.sep = ""
+		}
+	} else {
+		if s.h.json {
+			s.appendKey(name)
+			s.buf.WriteByte('[')
+			s.sep = ""
+		} else {
+			s.prefix.WriteString(name)
+		}
+	}
+
+	// Collect list names for ReplaceAttr.
+	if !inList && s.path != nil {
+		*s.path = append(*s.path, name)
+	}
+}
+
+// closeList ends the list with the given name.
+func (s *handleState) closeList(name string, inList bool) {
+	if s.h.json {
+		s.buf.WriteByte(']')
+	} else {
+		(*s.prefix) = (*s.prefix)[:len(*s.prefix)-len(name)]
+	}
+	s.sep = s.h.attrSep()
+	if !inList && s.path != nil {
+		*s.path = (*s.path)[:len(*s.path)-1]
 	}
 }
 
@@ -467,12 +513,12 @@ func (s *handleState) appendAttrs(as []Attr) bool {
 func (s *handleState) appendAttr(a Attr) bool {
 	a.Value = a.Value.Resolve()
 	if rep := s.h.opts.ReplaceAttr; rep != nil && a.Value.Kind() != KindGroup {
-		var gs []string
-		if s.groups != nil {
-			gs = *s.groups
+		var path []string
+		if s.path != nil {
+			path = *s.path
 		}
 		// a.Value is resolved before calling ReplaceAttr, so the user doesn't have to.
-		a = rep(gs, a)
+		a = rep(path, a)
 		// The ReplaceAttr function may return an unresolved Attr.
 		a.Value = a.Value.Resolve()
 	}
@@ -490,7 +536,8 @@ func (s *handleState) appendAttr(a Attr) bool {
 			}
 		}
 	}
-	if a.Value.Kind() == KindGroup {
+	switch {
+	case a.Value.IsGroup():
 		attrs := a.Value.Group()
 		// Output only non-empty groups.
 		if len(attrs) > 0 {
@@ -501,17 +548,21 @@ func (s *handleState) appendAttr(a Attr) bool {
 			pos := s.buf.Len()
 			// Inline a group with an empty key.
 			if a.Key != "" {
-				s.openGroup(a.Key)
+				s.openGroup(a.Key, false)
 			}
 			if !s.appendAttrs(attrs) {
 				s.buf.SetLen(pos)
 				return false
 			}
 			if a.Key != "" {
-				s.closeGroup(a.Key)
+				s.closeGroup(a.Key, false)
 			}
 		}
-	} else {
+	case a.Value.IsList():
+		s.openList(a.Key, false)
+		s.appendElems(a.Value.list())
+		s.closeList(a.Key, false)
+	default:
 		s.appendKey(a.Key)
 		s.appendValue(a.Value)
 	}
@@ -588,6 +639,62 @@ func (s *handleState) appendTime(t time.Time) {
 	} else {
 		*s.buf = appendRFC3339Millis(*s.buf, t)
 	}
+}
+
+func (s *handleState) appendElems(vs []Value) {
+	for i, v := range vs {
+		s.appendElem(i, v)
+	}
+}
+
+func (s *handleState) appendElem(index int, v Value) {
+	var pathIdx string
+	if s.path != nil || !s.h.json {
+		pathIdx = "[" + strconv.Itoa(index) + "]"
+	}
+
+	if s.path != nil {
+		*s.path = append(*s.path, pathIdx)
+		defer func() {
+			*s.path = (*s.path)[:len(*s.path)-1]
+		}()
+	}
+
+	if s.h.json {
+		s.buf.WriteString(s.sep)
+	} else {
+		s.prefix.WriteString(pathIdx)
+		defer func() {
+			*s.prefix = (*s.prefix)[:len(*s.prefix)-len(pathIdx)]
+		}()
+	}
+
+	rv := v.Resolve()
+	switch {
+	case rv.IsGroup():
+		// Add a group to a list, no key is needed inside a list.
+		s.openGroup("", true)
+		s.appendAttrs(rv.group())
+		s.closeGroup("", true)
+	case rv.IsList():
+		// Add a list to a list, no key is needed inside a list.
+		s.openList("", true)
+		s.appendElems(rv.list())
+		s.closeList("", true)
+	default:
+		if !s.h.json {
+			// For text format, append the current prefix to indicate list
+			// elements, as the index is already included in the prefix.
+			s.buf.WriteString(s.sep)
+			if s.prefix != nil && len(*s.prefix) > 0 {
+				// TODO: optimize by avoiding allocation.
+				s.appendString(string(*s.prefix))
+			}
+			s.buf.WriteByte('=')
+		}
+		s.appendValue(rv)
+	}
+	s.sep = s.h.attrSep()
 }
 
 func appendRFC3339Millis(b []byte, t time.Time) []byte {

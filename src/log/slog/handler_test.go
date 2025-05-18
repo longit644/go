@@ -486,8 +486,8 @@ func TestJSONAndTextHandlers(t *testing.T) {
 			with: func(h Handler) Handler {
 				return h.WithGroup("g").WithAttrs([]Attr{Int("a", 1)}).WithGroup("h").WithAttrs([]Attr{Int("b", 2)})
 			},
-			replace: func(groups []string, attr Attr) Attr {
-				return removeKeys(TimeKey, LevelKey, MessageKey, "a")(groups, attr)
+			replace: func(path []string, attr Attr) Attr {
+				return removeKeys(TimeKey, LevelKey, MessageKey, "a")(path, attr)
 			},
 			attrs:    []Attr{Group("i", Int("c", 3))},
 			wantText: "g.h.b=2 g.h.i.c=3",
@@ -498,8 +498,8 @@ func TestJSONAndTextHandlers(t *testing.T) {
 			with: func(h Handler) Handler {
 				return h.WithGroup("g").WithAttrs([]Attr{Int("a", 1)}).WithAttrs([]Attr{Int("n", 4)}).WithGroup("h").WithAttrs([]Attr{Int("b", 2)})
 			},
-			replace: func(groups []string, attr Attr) Attr {
-				return removeKeys(TimeKey, LevelKey, MessageKey, "a", "b")(groups, attr)
+			replace: func(path []string, attr Attr) Attr {
+				return removeKeys(TimeKey, LevelKey, MessageKey, "a", "b")(path, attr)
 			},
 			attrs:    []Attr{Group("i", Int("c", 3))},
 			wantText: "g.n=4 g.h.i.c=3",
@@ -510,8 +510,8 @@ func TestJSONAndTextHandlers(t *testing.T) {
 			with: func(h Handler) Handler {
 				return h.WithGroup("g").WithAttrs([]Attr{Int("x", 0)}).WithAttrs([]Attr{Int("a", 1)}).WithAttrs([]Attr{Int("n", 4)}).WithGroup("h").WithAttrs([]Attr{Int("b", 2)})
 			},
-			replace: func(groups []string, attr Attr) Attr {
-				return removeKeys(TimeKey, LevelKey, MessageKey, "a", "c")(groups, attr)
+			replace: func(path []string, attr Attr) Attr {
+				return removeKeys(TimeKey, LevelKey, MessageKey, "a", "c")(path, attr)
 			},
 			attrs:    []Attr{Group("i", Int("c", 3))},
 			wantText: "g.x=0 g.n=4 g.h.b=2",
@@ -519,11 +519,11 @@ func TestJSONAndTextHandlers(t *testing.T) {
 		},
 		{
 			name: "replace resolved group",
-			replace: func(groups []string, a Attr) Attr {
+			replace: func(path []string, a Attr) Attr {
 				if a.Value.Kind() == KindGroup {
 					return Attr{"bad", IntValue(1)}
 				}
-				return removeKeys(TimeKey, LevelKey, MessageKey)(groups, a)
+				return removeKeys(TimeKey, LevelKey, MessageKey)(path, a)
 			},
 			attrs:    []Attr{Any("name", logValueName{"Perry", "Platypus"})},
 			wantText: "name.first=Perry name.last=Platypus",

@@ -524,11 +524,11 @@ func clean(s string) string {
 }
 
 type captureHandler struct {
-	mu     sync.Mutex
-	ctx    context.Context
-	r      Record
-	attrs  []Attr
-	groups []string
+	mu    sync.Mutex
+	ctx   context.Context
+	r     Record
+	attrs []Attr
+	path  []string
 }
 
 func (h *captureHandler) Handle(ctx context.Context, r Record) error {
@@ -546,7 +546,7 @@ func (c *captureHandler) WithAttrs(as []Attr) Handler {
 	defer c.mu.Unlock()
 	var c2 captureHandler
 	c2.r = c.r
-	c2.groups = c.groups
+	c2.path = c.path
 	c2.attrs = concat(c.attrs, as)
 	return &c2
 }
@@ -557,7 +557,7 @@ func (c *captureHandler) WithGroup(name string) Handler {
 	var c2 captureHandler
 	c2.r = c.r
 	c2.attrs = c.attrs
-	c2.groups = append(slices.Clip(c.groups), name)
+	c2.path = append(slices.Clip(c.path), name)
 	return &c2
 }
 

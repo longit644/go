@@ -31,7 +31,7 @@ func ExampleHandlerOptions_customLevels() {
 		// LevelInfo, which would drop Debug and Trace logs.
 		Level: LevelTrace,
 
-		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+		ReplaceAttr: func(path []string, a slog.Attr) slog.Attr {
 			// Remove time from the output for predictable test output.
 			if a.Key == slog.TimeKey {
 				return slog.Attr{}

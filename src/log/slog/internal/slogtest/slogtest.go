@@ -10,8 +10,8 @@ import "log/slog"
 // RemoveTime removes the top-level time attribute.
 // It is intended to be used as a ReplaceAttr function,
 // to make example output deterministic.
-func RemoveTime(groups []string, a slog.Attr) slog.Attr {
-	if a.Key == slog.TimeKey && len(groups) == 0 {
+func RemoveTime(path []string, a slog.Attr) slog.Attr {
+	if a.Key == slog.TimeKey && len(path) == 0 {
 		return slog.Attr{}
 	}
 	return a

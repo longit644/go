@@ -36,8 +36,9 @@ type Value struct {
 }
 
 type (
-	stringptr *byte // used in Value.any when the Value is a string
-	groupptr  *Attr // used in Value.any when the Value is a []Attr
+	stringptr *byte  // used in Value.any when the Value is a string
+	groupptr  *Attr  // used in Value.any when the Value is a []Attr
+	listptr   *Value // used in Value.any when the Value is a []Value
 )
 
 // Kind is the kind of a [Value].
@@ -203,6 +204,19 @@ func countEmptyGroups(as []Attr) int {
 	return n
 }
 
+// ListValue returns a [Value] for a slice of arbitrary values.
+func ListValue[T any](vs ...T) Value {
+	switch vs2 := any(vs).(type) {
+	case []Value:
+		return Value{num: uint64(len(vs)), any: listptr(unsafe.SliceData(vs2))}
+	default:
+		return Value{
+			num: uint64(len(vs)),
+			any: listptr(unsafe.SliceData(argsToValueSlice(vs))),
+		}
+	}
+}
+
 // AnyValue returns a [Value] for the supplied value.
 //
 // If the supplied value is of type Value, it is returned
@@ -256,6 +270,8 @@ func AnyValue(v any) Value {
 		return Float64Value(float64(v))
 	case []Attr:
 		return GroupValue(v...)
+	case []Value:
+		return ListValue(v...)
 	case Kind:
 		return Value{any: kind(v)}
 	case Value:
@@ -271,10 +287,14 @@ func AnyValue(v any) Value {
 func (v Value) Any() any {
 	switch v.Kind() {
 	case KindAny:
-		if k, ok := v.any.(kind); ok {
-			return Kind(k)
+		switch vt := v.any.(type) {
+		case kind:
+			return Kind(vt)
+		case listptr:
+			return v.list()
+		default:
+			return v.any
 		}
-		return v.any
 	case KindLogValuer:
 		return v.any
 	case KindGroup:
@@ -415,6 +435,19 @@ func (v Value) group() []Attr {
 	return unsafe.Slice((*Attr)(v.any.(groupptr)), v.num)
 }
 
+// List returns v's value as a []Value.
+// It panics if v's [Kind] is not [KindList].
+func (v Value) List() []Value {
+	if sp, ok := v.any.(listptr); ok {
+		return unsafe.Slice((*Value)(sp), v.num)
+	}
+	panic("List: bad kind")
+}
+
+func (v Value) list() []Value {
+	return unsafe.Slice((*Value)(v.any.(listptr)), v.num)
+}
+
 //////////////// Other
 
 // Equal reports whether v and w represent the same Go value.
@@ -434,6 +467,10 @@ func (v Value) Equal(w Value) bool {
 	case KindTime:
 		return v.time().Equal(w.time())
 	case KindAny, KindLogValuer:
+		if v.IsList() && w.IsList() {
+			return slices.EqualFunc(v.list(), w.list(), Value.Equal)
+		}
+
 		return v.any == w.any // may panic if non-comparable
 	case KindGroup:
 		return slices.EqualFunc(v.group(), w.group(), Attr.Equal)
@@ -451,6 +488,18 @@ func (v Value) isEmptyGroup() bool {
 	// because GroupValue removed them when the group was constructed, and
 	// groups are immutable.
 	return len(v.group()) == 0
+}
+
+// IsGroup reports whether v is a group.
+func (v Value) IsGroup() bool {
+	_, isGroup := v.any.(groupptr)
+	return isGroup
+}
+
+// IsList reports whether v is a list.
+func (v Value) IsList() bool {
+	_, isList := v.any.(listptr)
+	return isList
 }
 
 // append appends a text representation of v to dst.
@@ -474,6 +523,10 @@ func (v Value) append(dst []byte) []byte {
 	case KindGroup:
 		return fmt.Append(dst, v.group())
 	case KindAny, KindLogValuer:
+		if _, ok := v.any.(listptr); ok {
+			return fmt.Append(dst, v.list())
+		}
+
 		return fmt.Append(dst, v.any)
 	default:
 		panic(fmt.Sprintf("bad kind: %s", v.Kind()))
@@ -505,7 +558,7 @@ func (v Value) Resolve() (rv Value) {
 		}
 	}()
 
-	for i := 0; i < maxLogValues; i++ {
+	for range maxLogValues {
 		if v.Kind() != KindLogValuer {
 			return v
 		}

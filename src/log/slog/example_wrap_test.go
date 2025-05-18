@@ -27,9 +27,9 @@ func Infof(logger *slog.Logger, format string, args ...any) {
 }
 
 func Example_wrapping() {
-	replace := func(groups []string, a slog.Attr) slog.Attr {
+	replace := func(path []string, a slog.Attr) slog.Attr {
 		// Remove time.
-		if a.Key == slog.TimeKey && len(groups) == 0 {
+		if a.Key == slog.TimeKey && len(path) == 0 {
 			return slog.Attr{}
 		}
 		// Remove the directory from the source's filename.

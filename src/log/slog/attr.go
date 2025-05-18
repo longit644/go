@@ -79,6 +79,21 @@ func argsToAttrSlice(args []any) []Attr {
 	return attrs
 }
 
+// List returns an Attr for a List [Value].
+// The first argument is the key; the remaining arguments are
+// converted to slice of [Value].
+func List[T any](key string, args ...T) Attr {
+	return Attr{key, ListValue(argsToValueSlice(args)...)}
+}
+
+func argsToValueSlice[T any](args []T) []Value {
+	var vs []Value
+	for _, arg := range args {
+		vs = append(vs, AnyValue(arg))
+	}
+	return vs
+}
+
 // Any returns an Attr for the supplied value.
 // See [AnyValue] for how values are treated.
 func Any(key string, value any) Attr {
